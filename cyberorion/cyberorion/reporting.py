@@ -49,14 +49,31 @@ async def finalize_task_report(
 
 
 def _strip_terminal(text: str) -> str:
-    return re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", str(text or ""))
+    text = re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", str(text or ""))
+    # 终端排版专用字符清理：进度表 box-drawing / block / 几何符号在
+    # 网页与 PDF 中易造成排版噪点，统一替换为可读形式。
+    text = re.sub(r"[\u2500-\u257f]", "─", text)
+    text = re.sub(r"[\u2580-\u259f]", "#", text)
+    text = re.sub(r"[\u25a0-\u25ff]", "*", text)
+    text = re.sub(r"\u2800\u2800", "  ", text)  # 双 Braille blank
+    return text
 
 
 def _latex_safe_text(value: Any) -> str:
     """Normalize terminal text before LaTeX escaping."""
     text = str(value if value is not None else "")
     text = re.sub(r"[\u2800-\u28ff]", "*", text)
+    # 终端表格/进度条绘制字符（box-drawing、block、几何符号）在 PDF 中
+    # 无法排版，替换为可读分隔符；保留中英文与常规标点。
+    text = re.sub(r"[\u2500-\u257f]", "─", text)  # box-drawing -> 单横线
+    text = re.sub(r"[\u2580-\u259f]", "#", text)  # block elements
+    text = re.sub(r"[\u25a0-\u25ff]", "*", text)  # geometric shapes
+    text = re.sub(r"[\u2190-\u21ff]", "->", text)  # arrows
+    text = re.sub(r"[\u2460-\u24ff]", " ", text)  # enclosed alphanumerics
+    text = re.sub(r"[│║╔╗╚╝╠╣╦╩╬═╬╪]", "", text)
     text = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]", "", text)
+    # 连续横线压缩为单条（避免摘要框内出现长分隔线）
+    text = re.sub(r"─{3,}", "──", text)
     return text
 
 
@@ -102,9 +119,39 @@ def _full_transcript(recording: dict[str, Any]) -> tuple[str, str]:
 
 def _extract_agent_events(transcript: str, recording: dict[str, Any]) -> list[dict[str, Any]]:
     events: list[dict[str, Any]] = []
-    for item in recording.get("agent_events") or []:
+    seen: set[str] = set()
+
+    def append_event(item: Any) -> None:
         if isinstance(item, dict):
-            events.append(dict(item))
+            payload = dict(item)
+            key = json.dumps(payload, ensure_ascii=False, sort_keys=True, default=str)
+            if key not in seen:
+                seen.add(key)
+                events.append(payload)
+
+    for item in recording.get("agent_events") or []:
+        append_event(item)
+
+    for key in ("agent_events_path", "agent_events_log"):
+        raw_path = str(recording.get(key) or "").strip()
+        if not raw_path:
+            continue
+        try:
+            lines = Path(raw_path).expanduser().read_text(
+                encoding="utf-8",
+                errors="replace",
+            ).splitlines()
+        except Exception:
+            continue
+        for line in lines:
+            raw = line.strip()
+            if not raw:
+                continue
+            try:
+                append_event(json.loads(raw))
+            except json.JSONDecodeError:
+                continue
+
     for line in transcript.splitlines():
         if _AGENT_EVENT_PREFIX not in line:
             continue
@@ -115,8 +162,7 @@ def _extract_agent_events(transcript: str, recording: dict[str, Any]) -> list[di
             payload = json.loads(raw)
         except json.JSONDecodeError:
             continue
-        if isinstance(payload, dict):
-            events.append(payload)
+        append_event(payload)
     return events
 
 
@@ -235,6 +281,11 @@ def build_report_context(recording: dict[str, Any], report_agent_output: str = "
         "artifacts": {
             "terminal_full_log": full_log_path,
             "full_log_available": bool(full_log_path and Path(full_log_path).expanduser().is_file()),
+            "agent_events": str(recording.get("agent_events_path") or ""),
+            "agent_events_available": bool(
+                recording.get("agent_events_path")
+                and Path(str(recording["agent_events_path"])).expanduser().is_file()
+            ),
             "transcript_source": transcript_source,
         },
         "usage": {
@@ -589,7 +640,7 @@ async def _call_report_agent(context: dict[str, Any], context_dir: str | Path | 
                 ),
                 max_turns=4,
             ),
-            timeout=120,
+            timeout=300,
         )
     finally:
         if previous_context_dir is None:
@@ -614,7 +665,7 @@ def _compile_tex(tex_path: Path) -> tuple[bool, str]:
             cwd=tex_path.parent,
             capture_output=True,
             text=True,
-            timeout=120,
+            timeout=300,
             check=False,
         )
     except Exception as exc:
@@ -864,6 +915,18 @@ def _render_report_pdf_reportlab(context: dict[str, Any], pdf_path: Path) -> tup
         story.extend(Paragraph(text, styles["OrionBullet"]) for text in _pdf_bullets(values))
 
     def add_panel(story: list[Any], content: list[Any]) -> None:
+        plain = "\n".join(
+            item.getPlainText() if hasattr(item, "getPlainText") else str(item)
+            for item in content
+        )
+        # ReportLab tables cannot split an oversized cell across pages. Large
+        # report bodies and terminal excerpts must stay as normal flowables so
+        # the PDF renderer can paginate them instead of failing with LayoutError.
+        if len(plain) > 1800 or plain.count("\n") > 18:
+            story.append(HRFlowable(width="100%", thickness=0.5, color=line_color, spaceAfter=2 * mm))
+            story.extend(content)
+            story.append(Spacer(1, 2 * mm))
+            return
         table = Table([[content]], colWidths=[174 * mm])
         table.setStyle(
             TableStyle(

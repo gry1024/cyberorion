@@ -4412,7 +4412,12 @@ def detect_claude_thinking_in_stream(model_name):
     # silently falls back to ordinary output and hides provider reasoning.
     has_deepseek_reasoning = "deepseek" in model_str
 
-    return has_claude_reasoning or has_deepseek_reasoning
+    # MiniMax-M series (M1/M2/M3) also streams provider reasoning through
+    # ``reasoning_content`` on its OpenAI-compatible endpoint, with a bare
+    # model name (for example ``MiniMax-M3``).
+    has_minimax_reasoning = "minimax" in model_str
+
+    return has_claude_reasoning or has_deepseek_reasoning or has_minimax_reasoning
 
 
 def print_claude_reasoning_simple(reasoning_content, agent_name, model_name):

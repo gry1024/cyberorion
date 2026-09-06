@@ -694,19 +694,33 @@ async def generic_linux_command(
                 "or sensitive operations."
             )
 
-    cwd_override, cwd_err = _resolve_optional_shell_cwd(working_directory)
-    if cwd_err:
-        return cwd_err
-    if cwd_override and session_id:
-        return (
-            "Error: working_directory cannot be used with session_id. "
-            "Omit working_directory for session commands, or start a new shell without session_id."
+    ignored_cwd_note = ""
+    container_active = bool(os.getenv("CAI_ACTIVE_CONTAINER"))
+    routed_environment = container_active or bool(session_id)
+    if routed_environment and working_directory:
+        # working_directory only makes sense for local-host execution. When the
+        # command is routed to the active Docker container (CTF_INSIDE) or to an
+        # interactive session, silently ignore it instead of erroring out —
+        # erroring made models retry the same call forever and burn CTF turns.
+        ignored_cwd_note = (
+            f"[note: working_directory='{working_directory}' ignored because "
+            f"command runs in {'active Docker container' if container_active else 'interactive session'}] "
         )
-    if cwd_override and os.getenv("CAI_ACTIVE_CONTAINER"):
-        return (
-            "Error: working_directory applies only to local host execution (no active Docker container). "
-            "Unset CAI_ACTIVE_CONTAINER or use absolute paths inside the container in ``command``."
-        )
+        cwd_override = None
+    else:
+        cwd_override, cwd_err = _resolve_optional_shell_cwd(working_directory)
+        if cwd_err:
+            return cwd_err
+        if cwd_override and session_id:
+            return (
+                "Error: working_directory cannot be used with session_id. "
+                "Omit working_directory for session commands, or start a new shell without session_id."
+            )
+        if cwd_override and os.getenv("CAI_ACTIVE_CONTAINER"):
+            return (
+                "Error: working_directory applies only to local host execution (no active Docker container). "
+                "Unset CAI_ACTIVE_CONTAINER or use absolute paths inside the container in ``command``."
+            )
 
     # Build args with timeout info for display
     # Parse command into parts for display
@@ -860,6 +874,9 @@ async def generic_linux_command(
     # Compress large output to prevent context overflow
     # User already sees full output via streaming, this only affects what goes to model
     result = _compress_output_for_model(result, command)
+
+    if ignored_cwd_note:
+        result = (ignored_cwd_note + str(result)) if result else ignored_cwd_note.strip()
 
     return result
 
