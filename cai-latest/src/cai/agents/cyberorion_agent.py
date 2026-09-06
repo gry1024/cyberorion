@@ -54,7 +54,13 @@ def build_cyberorion_instructions(task_type: str | None = None) -> str:
         "purple_team": "攻防演练",
     }.get(normalized, "通用安全任务")
     task_focus = {
-        "ctf": "围绕授权靶场与挑战目标进行推理、验证和总结。",
+        "ctf": (
+            "围绕授权靶场与挑战目标进行推理、验证和总结。必须先调度 CTF agent（one_tool / "
+            "CTF agent，带 generic_linux_command）在靶容器内真实执行命令：定位并读取 flag 文件"
+            "（如 /app/flag.txt、/challenge/metadata.json、/root/flag.txt），把工具的真实输出"
+            "原样带回；严禁仅凭推理或知识库内容占位交付 flag；Knowledge Agent 只提供背景参考，"
+            "不构成完成依据；任务完成前可用 flag_discriminator 校验格式。"
+        ),
         "code_repair": (
             "当前终端任务环境：修复代码漏洞。先复现或确认漏洞，再让 CodeAgent 检查并修复，"
             "再让 Retester 验证修复；只修改授权工作区，保留 diff 和测试输出。"
