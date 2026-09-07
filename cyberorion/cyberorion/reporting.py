@@ -240,6 +240,13 @@ def _estimate_tokens(text: str) -> int:
 def build_report_context(recording: dict[str, Any], report_agent_output: str = "") -> dict[str, Any]:
     transcript, transcript_source = _full_transcript(recording)
     agent_events = _extract_agent_events(transcript, recording)
+    # 报告 Agent 上下文精简：丢弃流式 agent_output 分块（其文本已由 terminal
+    # transcript 全文覆盖）。traffic_analysis 等重任务会产生数千条流式片段，
+    # 若全量塞给模型会超 MiniMax 上下文上限导致 400。结构化事件(start/done/
+    # error/tool_call/tool_output)与截断 transcript 已足够支撑高质量报告。
+    agent_events = [
+        e for e in agent_events if str(e.get("type") or "") != "agent_output"
+    ]
     task_type = str(recording.get("task_type") or "general")
     full_log_path = str(recording.get("full_log_path") or recording.get("terminal_full_log") or "")
     return {
