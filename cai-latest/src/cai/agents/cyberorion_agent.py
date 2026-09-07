@@ -75,6 +75,17 @@ def build_cyberorion_instructions(task_type: str | None = None) -> str:
             "这是一个系统化攻防演练任务：按授权范围组织红蓝 Agent，"
             "记录调度、证据、检测、处置和复查结果。"
         ),
+        "traffic_analysis": (
+            "基于授权工作区流量与日志做分层分析。必须真实读取任务工作区"
+            "（通常 CAI_TASK_CONTEXT 或工作区，如 task_environments/traffic_analysis/）"
+            "下的 web_access.log、auth.log、timeline.jsonl 等证据文件后再下结论；"
+            "先调度带文件执行能力（generic_linux_command / execute_code）的专业 Agent "
+            "（如 Memory/Network Analysis、Retester）读取并聚合连接、会话、时间窗、资产。"
+            "多个独立证据文件必须用 dispatch_agents_parallel 并行分析，杜绝串行空转。"
+            "关键：你必须汇总各子 Agent 已返回的真实证据（IP 画像、时间线、状态码、URI、"
+            "ATT&CK 映射、检测盲区）形成最终结论，不得因个别 Knowledge Agent 无文件工具失败"
+            "就声称工作区不可读而拒绝交付；Knowledge Agent 仅提供背景参考，不代表证据读取失败。"
+        ),
     }.get(normalized, "根据用户目标动态规划并调用匹配的专业 Agent。")
     skill_name, skill_text = _load_task_skill(normalized)
     skill_block = (
